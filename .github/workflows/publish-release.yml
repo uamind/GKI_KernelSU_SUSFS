@@ -409,6 +409,8 @@ jobs:
                 fi
               fi
               echo
+              echo "> 若安装时报「应用未安装」，先卸载旧管理器：不同分支/签名的管理器包名可能相同，会冲突。"
+              echo
             } >> body.md
           fi
 
@@ -417,7 +419,7 @@ jobs:
           fi
 
           {
-            echo "### 本次发布文件（${FILE_COUNT} 个）"
+            echo "### 本次上传的文件（${FILE_COUNT} 个）"
             echo
             echo "| 文件 | 大小 |"
             echo "|:---|:---|"
