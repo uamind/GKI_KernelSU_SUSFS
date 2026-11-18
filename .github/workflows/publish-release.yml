@@ -176,6 +176,7 @@ jobs:
           #      构建失败日志 / 补丁冲突文件留在 artifact 里，不进 Release
           rm -rf assets
           mkdir -p assets
+          ASSETS_ABS="$(pwd)/assets"
           count=0
           kernel_count=0
           seen_subs=""
@@ -211,15 +212,37 @@ jobs:
               esac
             fi
 
-            for f in "$d"*; do
-              if [ -f "$f" ]; then
-                cp -f "$f" assets/
+            if [ -n "$sub" ]; then
+              # ---- 内核产物 ----
+              zips=( "$d"*.zip )
+              if [ "${#zips[@]}" -gt 0 ]; then
+                # 「上传全部构建产物」模式：目录里已经是按版本命名的 zip / img，直接收
+                for f in "$d"*; do
+                  if [ -f "$f" ]; then
+                    cp -f "$f" assets/
+                    count=$((count + 1))
+                    kernel_count=$((kernel_count + 1))
+                  fi
+                done
+              else
+                # 「仅上传 AnyKernel3」模式：artifact 存的是解开的目录
+                # （anykernel.sh / Image / META-INF / tools）。拍平会互相覆盖同名文件
+                # （每个版本都有 Image、banner），所以必须按版本重新打包成可刷入的 zip。
+                out="${ANDROID}-${KERNEL}-${rest}.zip"
+                ( cd "$d" && zip -q -r -6 "$ASSETS_ABS/$out" . )
+                echo "打包: $out ($(du -h "$ASSETS_ABS/$out" | cut -f1))"
                 count=$((count + 1))
-                if [ -n "$sub" ]; then
-                  kernel_count=$((kernel_count + 1))
-                fi
+                kernel_count=$((kernel_count + 1))
               fi
-            done
+            else
+              # ---- 管理器 APK / SUSFS 模块 / 其它附加产物：直接收 ----
+              for f in "$d"*; do
+                if [ -f "$f" ]; then
+                  cp -f "$f" assets/
+                  count=$((count + 1))
+                fi
+              done
+            fi
           done
 
           # 没有内核产物时不要发一个只有管理器/模块的 Release
