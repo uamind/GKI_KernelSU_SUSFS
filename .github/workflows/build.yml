@@ -92,6 +92,10 @@ jobs:
     name: "${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}-${{ inputs.ksu_variant }}"
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # 矩阵各 leg 的版本号相同，取最后一个完成 leg 的值即可
+    outputs:
+      ksu_version: ${{ steps.add-ksu.outputs.ksu_version }}
+
 
     env:
       CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
@@ -456,6 +460,7 @@ jobs:
           echo "KSU 分支: $BRANCH"
 
       - name: 添加 KernelSU
+        id: add-ksu
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
           case "${{ inputs.ksu_variant }}" in
@@ -498,8 +503,24 @@ jobs:
           if [ -d "KernelSU/.git" ]; then
             KSU_LATEST_COMMIT_DATE=$(git -C KernelSU log -1 --date=format:'%Y-%m-%d %H:%M:%S %z' --format='%cd')
             echo "KSU_LATEST_COMMIT_DATE=$KSU_LATEST_COMMIT_DATE" >> $GITHUB_ENV
+
+            # 计算内核里嵌入的 KernelSU VersionCode。
+            # 管理器的 VersionCode 必须与它相等，否则会一直提示更新（发布 Release 时要用到）。
+            KSU_GIT_VERSION=$(git -C KernelSU rev-list --count HEAD 2>/dev/null || echo 0)
+            KSU_VER=""
+            case "${{ inputs.ksu_variant }}" in
+              "Official")      KSU_VER=$((20000 + KSU_GIT_VERSION)) ;;
+              "Next")          KSU_VER=$((30000 + KSU_GIT_VERSION)) ;;
+              "SukiSU")        KSU_VER=$((40000 + KSU_GIT_VERSION - 2815)) ;;
+              "ReSukiSU")      KSU_VER=$((30700 + KSU_GIT_VERSION)) ;;
+              "SukiSU(40726)") KSU_VER=40726 ;;
+              "SukiSU(40548)") KSU_VER=40548 ;;
+            esac
+            echo "ksu_version=$KSU_VER" >> "$GITHUB_OUTPUT"
+            echo "内核嵌入的 KernelSU VersionCode: ${KSU_VER:-未知}（提交数 $KSU_GIT_VERSION）"
           else
             echo "KSU_LATEST_COMMIT_DATE=未知" >> $GITHUB_ENV
+            echo "ksu_version=" >> "$GITHUB_OUTPUT"
           fi
 
       - name: 配置 SukiSU 管理器信息
@@ -1671,6 +1692,7 @@ jobs:
       android_version: ${{ inputs.android_version }}
       kernel_version: ${{ inputs.kernel_version }}
       ksu_variant: ${{ inputs.ksu_variant }}
+      ksu_version: ${{ needs.build-kernel.outputs.ksu_version }}
       sub_levels: ${{ inputs.release_sub_levels }}
       notes_header: |
         ### 本次构建配置

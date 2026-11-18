@@ -48,6 +48,11 @@ on:
         required: false
         type: string
         default: ""
+      ksu_version:
+        description: "内核嵌入的 KernelSU VersionCode（管理器的版本必须与它相等）"
+        required: false
+        type: string
+        default: ""
       notes_header:
         description: "附加到 Release 说明里的构建配置（Markdown，可选）"
         required: false
@@ -77,6 +82,11 @@ on:
         default: ""
       sub_levels:
         description: "只发布这些子版本号（空格/逗号分隔，如 162）；留空=全部"
+        required: false
+        type: string
+        default: ""
+      ksu_version:
+        description: "内核嵌入的 KernelSU VersionCode（可选，用于生成配套管理器提示）"
         required: false
         type: string
         default: ""
@@ -297,6 +307,7 @@ jobs:
           KERNEL: ${{ steps.collect.outputs.kernel }}
           VARIANT: ${{ steps.collect.outputs.variant }}
           SUBS: ${{ steps.collect.outputs.subs }}
+          KSU_VERSION: ${{ inputs.ksu_version }}
           NOTES_HEADER: ${{ inputs.notes_header }}
         run: |
           set -euo pipefail
@@ -310,6 +321,33 @@ jobs:
           BUILD_TIME=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M (UTC+8)')
           FILE_COUNT=$(ls -1 assets | wc -l | tr -d ' ')
           TITLE="GKI ${ANDROID} / ${KERNEL} - ${VARIANT}"
+
+          # 管理器所在的上游仓库（各 KernelSU 分支不同）
+          manager_repo() {
+            case "$VARIANT" in
+              ReSukiSU)  printf '%s' "ReSukiSU/ReSukiSU" ;;
+              SukiSU*)   printf '%s' "SukiSU-Ultra/SukiSU-Ultra" ;;
+              Official)  printf '%s' "tiann/KernelSU" ;;
+              Next)      printf '%s' "KernelSU-Next/KernelSU-Next" ;;
+              *)         printf '%s' "" ;;
+            esac
+          }
+
+          # 从上游 Releases 里挑 VersionCode <= 目标的最高版本 APK
+          manager_release_link() {
+            local target="$1" repo json
+            repo=$(manager_repo)
+            if [ -z "$repo" ]; then printf '%s' ""; return 0; fi
+            json=$(gh api "repos/${repo}/releases?per_page=10" 2>/dev/null || echo '[]')
+            printf '%s' "$json" | jq -r --argjson ksu "$target" '
+              [ .[].assets[]
+                | select(.name | test("-(arm64-v8a|universal)-release\\.apk$"))
+                | { url: .browser_download_url,
+                    ver: ((.name | capture("_(?<v>[0-9]+)-").v) | tonumber) } ]
+              | map(select(.ver <= $ksu))
+              | sort_by(.ver)
+              | if length == 0 then "" else .[-1].url end' 2>/dev/null || printf '%s' ""
+          }
 
           echo "标签: $TAG"
           echo "标题: $TITLE"
@@ -334,6 +372,45 @@ jobs:
             echo "| 发布时间 | ${BUILD_TIME} |"
             echo
           } > body.md
+
+          # ---- 配套管理器提示：VersionCode 必须与内核相等 ----
+          if [ -n "${KSU_VERSION:-}" ]; then
+            apk_name=""
+            for f in assets/*.apk; do
+              if [ -f "$f" ]; then apk_name="$(basename "$f")"; break; fi
+            done
+            # 本次 run 没收集到就看 Release 上是否已经挂着 APK（滚动发布会保留旧资产）
+            if [ -z "$apk_name" ]; then
+              apk_name=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+                --jq '[.assets[].name | select(endswith(".apk"))] | first // ""' 2>/dev/null || echo "")
+            fi
+
+            {
+              echo "### 配套管理器（必看）"
+              echo
+              echo "| 项目 | 值 |"
+              echo "|:---|:---|"
+              echo "| 内核嵌入的管理器版本 | VersionCode **${KSU_VERSION}** |"
+              echo "| 管理器要求 | VersionCode 必须 **等于 ${KSU_VERSION}** |"
+              echo
+              echo "> KernelSU 系管理器会和内核比对 VersionCode：管理器偏低会一直提示「请更新管理器」，偏高会提示「请更新内核」；装错分支（官方 20xxx / SukiSU 40xxx）同样对不上。"
+              echo
+              if [ -n "$apk_name" ]; then
+                echo "**管理器已随本 Release 附带**：[${apk_name}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${TAG}/${apk_name})"
+              else
+                link=$(manager_release_link "$KSU_VERSION")
+                repo=$(manager_repo)
+                if [ -n "$link" ]; then
+                  echo "本 Release 未附带管理器 APK，上游可用版本：[下载](${link})"
+                  echo
+                  echo "> 上游版本可能低于 ${KSU_VERSION}，装上仍会提示更新管理器；要完全消除提示需要 VersionCode = ${KSU_VERSION} 的构建。"
+                else
+                  echo "本 Release 未附带管理器 APK，请到 [${repo}](https://github.com/${repo}/releases) 的 Releases / Actions 产物里找 VersionCode = ${KSU_VERSION} 的构建。"
+                fi
+              fi
+              echo
+            } >> body.md
+          fi
 
           if [ -n "$(printf '%s' "$NOTES_HEADER" | tr -d '[:space:]')" ]; then
             printf '%s\n\n' "$NOTES_HEADER" >> body.md
