@@ -80,6 +80,12 @@ on:
         required: false
         type: boolean
         default: false
+      # 只把这些子版本号发布到 Release（空格或逗号分隔，如 "162"）。
+      # 留空 = 本次构建的所有子版本都发布。
+      release_sub_levels:
+        required: false
+        type: string
+        default: ""
 
 jobs:
   build-kernel:
@@ -1665,6 +1671,7 @@ jobs:
       android_version: ${{ inputs.android_version }}
       kernel_version: ${{ inputs.kernel_version }}
       ksu_variant: ${{ inputs.ksu_variant }}
+      sub_levels: ${{ inputs.release_sub_levels }}
       notes_header: |
         ### 本次构建配置
 

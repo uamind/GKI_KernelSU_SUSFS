@@ -208,6 +208,8 @@ jobs:
       droidspaces: ${{ inputs.droidspaces || 'off' }}
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync || false }}
       artifact_upload_mode: ${{ inputs.artifact_upload_mode }}
+      # 只把 6.1.162 发布到 Release（留空 = 本次构建的所有子版本）
+      release_sub_levels: "162"
 
   # 仅在直接触发时运行，从 main.yml 调用时跳过
   get-ksu-manager:

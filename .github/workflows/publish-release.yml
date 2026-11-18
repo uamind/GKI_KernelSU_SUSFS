@@ -43,6 +43,11 @@ on:
         required: false
         type: string
         default: ""
+      sub_levels:
+        description: "只发布这些子版本号（空格/逗号分隔，如 162）；留空=全部"
+        required: false
+        type: string
+        default: ""
       notes_header:
         description: "附加到 Release 说明里的构建配置（Markdown，可选）"
         required: false
@@ -70,6 +75,11 @@ on:
         required: false
         type: string
         default: ""
+      sub_levels:
+        description: "只发布这些子版本号（空格/逗号分隔，如 162）；留空=全部"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -91,6 +101,7 @@ jobs:
           IN_ANDROID: ${{ inputs.android_version }}
           IN_KERNEL: ${{ inputs.kernel_version }}
           IN_VARIANT: ${{ inputs.ksu_variant }}
+          IN_SUB_LEVELS: ${{ inputs.sub_levels }}
         run: |
           set -euo pipefail
 
@@ -123,7 +134,7 @@ jobs:
               | sort -u)
             n=$(printf '%s\n' "$detected" | grep -c . || true)
             if [ "$n" -eq 0 ]; then
-              echo "::error::产物里找不到 *_kernel-android<版本>-<内核>.* 形式的内核包，无法确定平台"
+              echo "::error::产物里找不到 \`*_kernel-android<版本>-<内核>-<子版本>\` 形式的内核包，无法确定平台"
               exit 1
             fi
             if [ "$n" -gt 1 ]; then
@@ -155,46 +166,98 @@ jobs:
 
           echo "平台=$ANDROID  内核=$KERNEL  变体=$VARIANT"
 
+          # 只发布指定的子版本号（如 162）；留空则全部发布
+          SUB_LEVELS=$(printf '%s' "$IN_SUB_LEVELS" | tr ',' ' ' | tr -s ' ')
+          if [ -n "$(printf '%s' "$SUB_LEVELS" | tr -d '[:space:]')" ]; then
+            echo "限定子版本: $SUB_LEVELS"
+          fi
+
           # ---- 3. 只挑本平台的内核产物，外加管理器和 SUSFS 模块 ----
           #      构建失败日志 / 补丁冲突文件留在 artifact 里，不进 Release
           rm -rf assets
           mkdir -p assets
           count=0
+          kernel_count=0
+          seen_subs=""
           for d in "${dirs[@]}"; do
             name="${d%/}"
             name="${name##*/}"
+
             case "$name" in
               *-Build-Logs|*-Rejects) continue ;;
             esac
+
+            sub=""
             case "$name" in
-              *"${PREFIX}"*) ;;
+              *"${PREFIX}"*)
+                # artifact 名 PREFIX 之后紧跟子版本号，如 ..._kernel-android14-6.1-162-AnyKernel3
+                rest="${name#*"${PREFIX}"}"
+                sub="${rest%%-*}"
+                if [ -n "$(printf '%s' "$SUB_LEVELS" | tr -d '[:space:]')" ]; then
+                  case " ${SUB_LEVELS} " in
+                    *" ${sub} "*) ;;
+                    *) continue ;;
+                  esac
+                fi
+                ;;
               *-Manager*|susfs-release-*) ;;
               *) continue ;;
             esac
+
+            if [ -n "$sub" ]; then
+              case " ${seen_subs} " in
+                *" ${sub} "*) ;;
+                *) seen_subs="${seen_subs} ${sub}" ;;
+              esac
+            fi
+
             for f in "$d"*; do
               if [ -f "$f" ]; then
                 cp -f "$f" assets/
                 count=$((count + 1))
+                if [ -n "$sub" ]; then
+                  kernel_count=$((kernel_count + 1))
+                fi
               fi
             done
           done
+
+          # 没有内核产物时不要发一个只有管理器/模块的 Release
+          if [ "$kernel_count" -eq 0 ]; then
+            if [ -n "$(printf '%s' "$SUB_LEVELS" | tr -d '[:space:]')" ]; then
+              echo "::error::该 run 里没有子版本 '$SUB_LEVELS' 的内核产物（本次构建可能失败，或版本号写错）"
+              exit 1
+            fi
+            echo "::warning::该 run 里没有 $ANDROID/$KERNEL 的内核产物，跳过发布"
+            count=0
+          fi
 
           # ---- 4. 生成滚动 tag ----
           VARIANT_SLUG=$(printf '%s' "$VARIANT" \
             | LC_ALL=C tr -c 'A-Za-z0-9._-' '-' \
             | sed -e 's/-\{2,\}/-/g' -e 's/^-//' -e 's/-$//')
-          TAG="A${ANDROID#android}-${KERNEL}-${VARIANT_SLUG}"
+
+          # 明确限定单个子版本时，tag 带上具体版本号，如 A14-6.1.162-ReSukiSU
+          SUBS_NORM=$(printf '%s' "$SUB_LEVELS" | tr -s ' ' | sed -e 's/^ //' -e 's/ $//')
+          SUB_COUNT=$(printf '%s\n' "$SUBS_NORM" | tr ' ' '\n' | grep -c . || true)
+          if [ -n "$SUBS_NORM" ] && [ "$SUB_COUNT" -eq 1 ]; then
+            VERSION_STR="${KERNEL}.${SUBS_NORM}"
+          else
+            VERSION_STR="$KERNEL"
+          fi
+          TAG="A${ANDROID#android}-${VERSION_STR}-${VARIANT_SLUG}"
 
           {
             echo "tag=$TAG"
             echo "android=$ANDROID"
             echo "kernel=$KERNEL"
             echo "variant=$VARIANT"
+            echo "subs=$SUBS_NORM"
             echo "asset_count=$count"
           } >> "$GITHUB_OUTPUT"
 
           echo "Release tag : $TAG"
-          echo "待发布文件  : $count"
+          echo "待发布文件  : $count（内核包 $kernel_count 个）"
           if [ "$count" -gt 0 ]; then
             du -sh assets
             ls -1 assets
@@ -210,6 +273,7 @@ jobs:
           ANDROID: ${{ steps.collect.outputs.android }}
           KERNEL: ${{ steps.collect.outputs.kernel }}
           VARIANT: ${{ steps.collect.outputs.variant }}
+          SUBS: ${{ steps.collect.outputs.subs }}
           NOTES_HEADER: ${{ inputs.notes_header }}
         run: |
           set -euo pipefail
@@ -238,6 +302,9 @@ jobs:
             echo "|:---|:---|"
             echo "| 平台 | \`${ANDROID}\` / ${KERNEL} |"
             echo "| KernelSU 变体 | ${VARIANT} |"
+            if [ -n "$SUBS" ]; then
+              echo "| 限定子版本 | \`${SUBS}\` |"
+            fi
             echo "| 来源运行 | [#${RUN_ID}](${RUN_URL}) |"
             echo "| 构建结论 | \`${CONCLUSION}\` |"
             echo "| 分支 / 提交 | \`${BRANCH}\` @ \`${HEAD_SHA:0:7}\` |"
