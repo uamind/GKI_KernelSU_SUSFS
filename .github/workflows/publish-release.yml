@@ -337,8 +337,12 @@ jobs:
               --title "$TITLE" --notes-file body.md
           else
             echo "创建 Release: $TAG"
+            # 不要传 --target 指向历史 commit：GitHub 会给 GITHUB_TOKEN 返回
+            # 403 Resource not accessible by integration（在旧 commit 上建 tag 被拒）。
+            # tag 交给默认分支 HEAD 即可，真实构建来源已写在说明的
+            # 「来源运行 / 分支·提交」两行里。
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
-              --title "$TITLE" --notes-file body.md --target "$HEAD_SHA"
+              --title "$TITLE" --notes-file body.md
           fi
 
           echo "上传 ${FILE_COUNT} 个文件（同名覆盖）..."
