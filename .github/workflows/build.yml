@@ -1646,3 +1646,34 @@ jobs:
           path: patch-rejects/
           if-no-files-found: ignore
           compression-level: 9
+
+  # ==================== 发布 Release ====================
+  # artifact 只有 90 天保留期（过期即永久删除，不可恢复），因此构建结束后
+  # 额外把产物发一份到 Release：Assets 不会过期，下载链接长期有效。
+  # 每个「平台 + 内核版本 + KernelSU 变体」共用一个滚动 Release，
+  # tag 形如 A14-6.1-ReSukiSU；同名文件用 --clobber 覆盖，始终是最新构建。
+  publish-release:
+    name: "发布 Release - ${{ inputs.android_version }}-${{ inputs.kernel_version }}"
+    needs: build-kernel
+    if: ${{ !cancelled() }}
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/publish-release.yml
+    with:
+      run_id: ${{ github.run_id }}
+      android_version: ${{ inputs.android_version }}
+      kernel_version: ${{ inputs.kernel_version }}
+      ksu_variant: ${{ inputs.ksu_variant }}
+      notes_header: |
+        ### 本次构建配置
+
+        | 项目 | 内容 |
+        |:---|:---|
+        | SUSFS | ${{ inputs.enable_susfs }} |
+        | ZRAM 增强 | ${{ inputs.use_zram }} |
+        | BBG 安全补丁 | ${{ inputs.use_bbg }} |
+        | KPM | ${{ inputs.use_kpm }} |
+        | Re-Kernel | ${{ inputs.use_rekernel }} |
+        | Droidspaces | ${{ inputs.droidspaces }} |
+        | 产物上传模式 | ${{ inputs.artifact_upload_mode }} |
