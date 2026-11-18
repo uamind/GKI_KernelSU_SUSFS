@@ -235,13 +235,13 @@ jobs:
                 kernel_count=$((kernel_count + 1))
               fi
             else
-              # ---- 管理器 APK / SUSFS 模块 / 其它附加产物：直接收 ----
-              for f in "$d"*; do
-                if [ -f "$f" ]; then
-                  cp -f "$f" assets/
-                  count=$((count + 1))
-                fi
-              done
+              # ---- 管理器 APK / SUSFS 模块 / 其它附加产物 ----
+              # 注意：管理器 artifact 的 path 是 manager-artifacts/**/*.apk，
+              # APK 会在子目录里，必须递归取文件，不能只扫顶层。
+              while IFS= read -r -d '' f; do
+                cp -f "$f" assets/
+                count=$((count + 1))
+              done < <(find "$d" -type f -print0)
             fi
           done
 
